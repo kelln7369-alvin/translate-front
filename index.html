@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>即時語音 AI 翻譯（段落模式 / Flask 後端）</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html,body { height:100% } .card{border:1px solid #e5e7eb} .scroll-area{scroll-behavior:smooth}
+  </style>
+</head>
+<body class="min-h-full bg-gradient-to-br from-sky-50 via-white to-indigo-50 text-slate-800">
+  <div class="max-w-5xl mx-auto p-4 md:p-6 space-y-4">
+    <header class="flex items-center justify-between">
+      <h1 class="text-2xl md:text-3xl font-semibold">🎧 即時語音 AI 翻譯 – 段落模式</h1>
+      <span class="text-xs text-slate-500">Flask 後端版</span>
+    </header>
+
+    <!-- 設定列 -->
+    <section class="grid gap-3 md:grid-cols-2">
+      <div class="rounded-2xl p-4 shadow bg-white grid gap-3">
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="block text-sm font-medium mb-1">ASR 語言</label>
+            <select id="inputLang" class="w-full rounded-xl border p-2">
+              <option value="">自動/預設</option>
+              <option value="cmn-Hant-TW" selected>中文（繁體）</option>
+              <option value="en-US">English (US)</option>
+              <option value="ja-JP">日本語</option>
+              <option value="ko-KR">한국어</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">翻譯目標語言</label>
+            <select id="targetLang" class="w-full rounded-xl border p-2">
+              <option value="zh-TW">中文（繁體）</option>
+              <option value="en" selected>English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">模型</label>
+            <select id="modelId" class="w-full rounded-xl border p-2">
+              <option value="gpt-4o-mini">gpt-4o-mini（推薦）</option>
+              <option value="o4-mini">o4-mini</option>
+              <option value="gpt-4o">gpt-4o</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- 新增：四個快捷切換按鈕（中→英、英→中、中→日、日→中） -->
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="presetZhEn" class="rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-medium">中→英</button>
+          <button id="presetEnZh" class="rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-medium">英→中</button>
+          <button id="presetZhJa" class="rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-medium">中→日</button>
+          <button id="presetJaZh" class="rounded-xl bg-slate-100 px-3 py-1.5 text-sm font-medium">日→中</button>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <button id="startBtn" class="flex-1 rounded-xl bg-indigo-600 text-white py-2 font-medium hover:bg-indigo-700">開始收音</button>
+          <button id="stopBtn"  class="rounded-xl bg-slate-200 py-2 px-3 font-medium" disabled>停止</button>
+          <button id="saveBtn"  class="rounded-xl bg-emerald-600 text-white py-2 px-3 font-medium" disabled>保存本段 ⌘/Ctrl+Enter</button>
+          <button id="clearBtn" class="rounded-xl bg-slate-100 py-2 px-3 font-medium">清空草稿</button>
+        </div>
+        <p id="status" class="text-xs text-slate-500">狀態：待機</p>
+      </div>
+    </section>
+
+    <!-- 雙欄：逐字稿 / 同步翻譯 -->
+    <section class="grid md:grid-cols-2 gap-3">
+      <div class="rounded-3xl shadow bg-white p-4 space-y-2">
+        <div class="text-sm text-slate-500">逐字稿（可編輯）</div>
+        <textarea id="srcBox" rows="10" class="w-full resize-y outline-none p-3 rounded-xl border"></textarea>
+      </div>
+      <div class="rounded-3xl shadow bg-white p-4 space-y-2">
+        <div class="text-sm text-slate-500">同步翻譯</div>
+        <textarea id="tgtBox" rows="10" class="w-full resize-y outline-none p-3 rounded-xl border bg-slate-50" readonly></textarea>
+      </div>
+    </section>
+
+    <!-- 紀錄 -->
+    <section>
+      <div class="rounded-3xl shadow bg-white">
+        <div class="px-6 py-3 border-b text-sm text-slate-500">對話紀錄</div>
+        <div id="log" class="scroll-area max-h-[48vh] overflow-auto p-6 space-y-4"></div>
+      </div>
+    </section>
+  </div>
+
+ <script>
+  // 若部署在 GitHub Pages，請把 <YOUR-RENDER-SERVICE> 改成你在 Render 的服務名稱。
+
+  // ===== DOM =====
+  const inputLangEl = document.getElementById('inputLang');
+  const targetEl = document.getElementById('targetLang');
+  const modelEl  = document.getElementById('modelId');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn  = document.getElementById('stopBtn');
+  const saveBtn  = document.getElementById('saveBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const statusEl = document.getElementById('status');
+  const srcBox   = document.getElementById('srcBox');
+  const tgtBox   = document.getElementById('tgtBox');
+  const logEl    = document.getElementById('log');
+
+  // 新增：快捷按鈕元素
+  const btnZhEn = document.getElementById('presetZhEn');
+  const btnEnZh = document.getElementById('presetEnZh');
+  const btnZhJa = document.getElementById('presetZhJa');
+  const btnJaZh = document.getElementById('presetJaZh');
+
+  // 後端位址（若你改了後端埠，這裡也要一起改）
+  const BACKEND = (location.hostname.endsWith("github.io") || location.protocol === "file:")
+  ? "https://<YOUR-RENDER-SERVICE>.onrender.com"
+  : `${location.protocol}//${location.hostname}:5501`;
+
+  // ===== 小工具 =====
+  let recognizing = false, recognition = null, lastTranslated = "";
+  const debounce = (fn, delay=700)=>{ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a),delay); } }
+  const escapeHtml = s => (s||"").replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))
+  function setStatus(msg){ statusEl.textContent = "狀態：" + msg; }
+  function addLogItem(src, tgt){
+    const card = document.createElement('div');
+    card.className = "card rounded-2xl p-4";
+    card.innerHTML = `
+      <div class="text-xs text-slate-500 mb-2">原文</div>
+      <div class="whitespace-pre-wrap mb-3">${escapeHtml(src)}</div>
+      <div class="text-xs text-slate-500 mb-2">翻譯</div>
+      <div class="whitespace-pre-wrap font-medium">${escapeHtml(tgt)}</div>`;
+    logEl.appendChild(card); logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // ===== 後端翻譯 =====
+  async function translate(text){
+    const r = await fetch(`${BACKEND}/translate`, {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ text, target: targetEl.value, model: modelEl.value })
+    });
+    if(!r.ok){
+      const t = await r.text().catch(()=>r.statusText);
+      throw new Error(`後端 ${r.status}: ${t}`);
+    }
+    const obj = await r.json();
+    return obj.translation || "";
+  }
+
+  const debouncedTranslate = debounce(async ()=>{
+    const text = srcBox.value.trim();
+    if(!text){ tgtBox.value = ""; return; }
+    if(text === lastTranslated) return;
+    lastTranslated = text;
+    try{
+      setStatus("翻譯中…");
+      tgtBox.value = await translate(text);
+      setStatus("就緒");
+    }catch(e){
+      tgtBox.value = `【翻譯失敗】${e.message}`;
+      setStatus("翻譯失敗");
+    }
+  }, 700);
+
+  srcBox.addEventListener('input', debouncedTranslate);
+
+  // ===== 音訊權限／支援偵測 =====
+  function isSecureContextOk(){
+    // getUserMedia 只能在 HTTPS 或 localhost 使用
+    const isLocalhost = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+    return (location.protocol === "https:" || isLocalhost);
+  }
+
+  function isMediaSupported(){
+    return !!(navigator.mediaDevices && typeof navigator.mediaDevices.getUserMedia === "function");
+  }
+
+  async function checkMicrophonePermission(){
+    try{
+      if (!navigator.permissions?.query) return "unknown";
+      const p = await navigator.permissions.query({ name: "microphone" });
+      return p.state; // 'granted' | 'denied' | 'prompt'
+    }catch{ return "unknown"; }
+  }
+
+  async function requestMic(){
+    // 1) 安全情境檢查（HTTPS / localhost）
+    if (!isSecureContextOk()){
+      throw new Error("此頁面不是 HTTPS（或 localhost）。瀏覽器為了安全不允許開麥。請改用 https:// 網址開啟，或在 Synology 啟用憑證/反向代理。");
+    }
+
+    // 2) API 支援檢查
+    if (!isMediaSupported()){
+      throw new Error("瀏覽器不支援 getUserMedia。請改用桌機版 Chrome/Edge/Firefox 最新版，或更新瀏覽器。");
+    }
+
+    // 3) 權限狀態提示
+    const state = await checkMicrophonePermission();
+    if (state === "denied"){
+      throw new Error("麥克風權限被封鎖。請點網址列左邊的鎖頭 → 允許『麥克風』，然後重新整理頁面。");
+    }
+
+    // 4) 真正要權限
+    try{
+      window.currentStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }catch(err){
+      const map = {
+        NotAllowedError: "你拒絕了麥克風權限。請允許後再試一次。",
+        NotFoundError: "找不到可用的麥克風裝置。",
+        NotReadableError: "麥克風被其他應用程式佔用，或系統阻擋存取。",
+        OverconstrainedError: "要求的音訊條件不被支援。",
+        SecurityError: "安全性限制阻擋存取（請改用 HTTPS）。"
+      };
+      const msg = map[err?.name] || (err?.message || "無法開啟麥克風");
+      throw new Error(msg);
+    }
+  }
+
+  // ===== Web Speech ASR =====
+  function ensureASRSupported(){
+    const ok = ('webkitSpeechRecognition' in window) || ('SpeechRecognition' in window);
+    if(!ok) throw new Error("此瀏覽器未支援 Web Speech API（建議桌機版 Chrome）。");
+  }
+
+  function startASR(){
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    const lang = inputLangEl.value.trim();
+    if (lang) recognition.lang = lang;
+    recognition.continuous = true;
+    recognition.interimResults = true;
+
+    let finalBuf = "";
+    recognition.onresult = (evt)=>{
+      if(!recognizing) return;
+      let interim="";
+      for(let i=evt.resultIndex;i<evt.results.length;i++){
+        const r=evt.results[i];
+        if(r.isFinal) finalBuf += r[0].transcript + " ";
+        else interim += r[0].transcript;
+      }
+      const live = (finalBuf + (interim ? " " + interim : "")).trim();
+      srcBox.value = live; debouncedTranslate();
+    };
+    recognition.onerror = (e)=>{
+      const human = {
+        'no-speech':'沒有收到語音',
+        'audio-capture':'找不到麥克風',
+        'not-allowed':'麥克風權限被拒'
+      }[e.error] || e.error || '未知';
+      setStatus("辨識錯誤 - " + human);
+    };
+    recognition.onend = ()=>{ if(recognizing) recognition.start(); };
+    recognition.start(); recognizing = true;
+  }
+
+  function stopAll(){
+    recognizing=false;
+    if(recognition){ try{ recognition.onend=null; recognition.stop(); }catch(e){} recognition=null; }
+  }
+
+  // ===== 事件綁定 =====
+  startBtn.addEventListener('click', async ()=>{
+    try{
+      ensureASRSupported();
+      setStatus("檢查麥克風權限…");
+      await requestMic();
+
+      startBtn.disabled=true; stopBtn.disabled=false; saveBtn.disabled=false;
+      setStatus("已啟動麥克風，聽寫中…");
+      startASR();
+    }catch(e){
+      setStatus(e.message);
+      startBtn.disabled=false; stopBtn.disabled=true; saveBtn.disabled=true;
+    }
+  });
+
+  stopBtn.addEventListener('click', ()=>{
+    stopAll(); startBtn.disabled=false; stopBtn.disabled=true;
+    // 關閉麥克風音訊串流
+    if (window.currentStream) {
+      window.currentStream.getTracks().forEach(track => track.stop());
+      window.currentStream = null;
+    }
+    setStatus("已停止聽寫");
+  });
+
+  clearBtn.addEventListener('click', ()=>{
+    srcBox.value=""; tgtBox.value=""; lastTranslated="";
+    setStatus("草稿已清空");
+  });
+
+  function saveCurrent(){
+    const s=srcBox.value.trim(), t=tgtBox.value.trim();
+    if(!s && !t) return;
+    addLogItem(s,t);
+    srcBox.value=""; tgtBox.value=""; lastTranslated="";
+    setStatus("已保存一段，開始下一段…");
+  }
+  saveBtn.addEventListener('click', saveCurrent);
+  document.addEventListener('keydown',(e)=>{ if((e.metaKey||e.ctrlKey)&&e.key==="Enter"){ e.preventDefault(); saveCurrent(); } });
+
+  // 新增：四個預設語向切換
+  function applyPreset(asrLang, targetLang){
+    inputLangEl.value = asrLang;
+    targetEl.value = targetLang;
+    setStatus("已套用預設：" + (asrLang || "自動") + " → " + targetLang);
+  }
+  btnZhEn.addEventListener('click', ()=>applyPreset('cmn-Hant-TW','en'));
+  btnEnZh.addEventListener('click', ()=>applyPreset('en-US','zh-TW'));
+  btnZhJa.addEventListener('click', ()=>applyPreset('cmn-Hant-TW','ja'));
+  btnJaZh.addEventListener('click', ()=>applyPreset('ja-JP','zh-TW'));
+
+  // 啟動時檢查 HTTPS 與後端可用性
+  (async () => {
+    if (!isSecureContextOk()){
+      setStatus("偵測到非 HTTPS（或非 localhost）。為了能開啟麥克風，請用 https:// 的網址存取此頁面。");
+    } else {
+      setStatus("就緒（已連上後端前再試麥克風）");
+    }
+    try {
+      const r = await fetch(`${BACKEND}/translate`, {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({ text:"ping", target:"en", model:"gpt-4o-mini" })
+      });
+      if(!r.ok) throw new Error();
+    } catch {
+      setStatus("提醒：前端已載入，但後端也需要啟動並開放 5501 才能翻譯。");
+    }
+  })();
+</script>
+
+</body>
+</html>
