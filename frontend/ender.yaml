@@ -1,0 +1,12 @@
+
+services:
+  - type: web
+    name: translate-back
+    env: python
+    plan: free
+    autoDeploy: true
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
